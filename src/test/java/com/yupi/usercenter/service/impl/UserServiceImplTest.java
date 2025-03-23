@@ -24,7 +24,7 @@ class UserServiceImplTest {
     @Test
     void searchUserByTags() {
         List<String> tagNameList = Arrays.asList("java", "python");
-        List<User> userList = userService.searchUserByTags(tagNameList);
+        List<User> userList = userService.searchUserByTagsInMemory(tagNameList);
         Assert.assertNotNull(userList);
     }
 }

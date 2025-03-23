@@ -1,7 +1,8 @@
 package com.yupi.usercenter.controller;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import com.fasterxml.jackson.databind.ser.Serializers;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.yupi.usercenter.common.BaseResponse;
 import com.yupi.usercenter.common.ErrorCode;
 import com.yupi.usercenter.common.ResultUtils;
@@ -10,16 +11,19 @@ import com.yupi.usercenter.model.domain.User;
 import com.yupi.usercenter.model.domain.request.UserLoginRequest;
 import com.yupi.usercenter.model.domain.request.UserRegisterRequest;
 import com.yupi.usercenter.service.UserService;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
+import org.springframework.util.CollectionUtils;
 import org.springframework.web.bind.annotation.*;
 
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
-import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
-import static com.yupi.usercenter.contant.UserConstant.ADMIN_ROLE;
 import static com.yupi.usercenter.contant.UserConstant.USER_LOGIN_STATE;
 
 /**
@@ -30,10 +34,15 @@ import static com.yupi.usercenter.contant.UserConstant.USER_LOGIN_STATE;
  */
 @RestController
 @RequestMapping("/user")
+@CrossOrigin
+@Slf4j
 public class UserController {
 
     @Resource
     private UserService userService;
+
+    @Resource
+    private RedisTemplate<String,Object> redisTemplate;
 
     /**
      * 用户注册
@@ -100,6 +109,23 @@ public class UserController {
     }
 
     /**
+     * 修改用户信息
+     * @Param user
+     * @Param request
+     * @return BaseResponse<Integer>
+     */
+    @PostMapping("/update")
+    public BaseResponse<Integer> update(@RequestBody User user, HttpServletRequest request){
+        if(user == null){
+            return ResultUtils.error(ErrorCode.PARAMS_ERROR);
+        }
+        User loginUser = userService.getLoginUser(request);
+        int result = userService.updateUser(user, loginUser);
+
+        return ResultUtils.success(result);
+    }
+
+    /**
      * 获取当前用户
      *
      * @param request
@@ -123,7 +149,7 @@ public class UserController {
 
     @GetMapping("/search")
     public BaseResponse<List<User>> searchUsers(String username, HttpServletRequest request) {
-        if (!isAdmin(request)) {
+        if (!userService.isAdmin(request)) {
             throw new BusinessException(ErrorCode.NO_AUTH, "缺少管理员权限");
         }
         QueryWrapper<User> queryWrapper = new QueryWrapper<>();
@@ -135,9 +161,43 @@ public class UserController {
         return ResultUtils.success(list);
     }
 
+    @GetMapping("/recommond")
+    public BaseResponse<IPage<User>> recommondUser(int pageNum,int pageSize,HttpServletRequest request){
+        User loginUser = userService.getLoginUser(request);
+        String RedisKey = String.format("FriendMatch-recommondUser-%s", loginUser.getId());
+        //从redis获取数据，若无则向数据库查询
+        ValueOperations<String, Object> opsForValue = redisTemplate.opsForValue();
+        Page<User> page = (Page<User>) opsForValue.get(RedisKey);
+        if(page != null){
+            return ResultUtils.success(page);
+        }
+        //若无则向数据库查询
+        QueryWrapper<User> queryWrapper = new QueryWrapper<>();
+        page = userService.page(new Page<>(pageNum, pageSize), queryWrapper);
+        List<User> records = page.getRecords();
+        List<User> list = records.stream().map(user -> userService.getSafetyUser(user)).collect(Collectors.toList());
+        page.setRecords(list);
+        //redis缓存
+        try {
+            opsForValue.set(RedisKey, page,300, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            log.error("Redis error" + e.getMessage());
+        }
+        return ResultUtils.success(page);
+    }
+
+    @GetMapping("/search/tags")
+    public BaseResponse<List<User>> searchUserByTags(@RequestParam(required = false) List<String> tagNameList){
+        if(CollectionUtils.isEmpty(tagNameList)){
+            throw new BusinessException(ErrorCode.PARAMS_ERROR);
+        }
+        List<User> users = userService.searchUserByTagsInMemory(tagNameList);
+        return ResultUtils.success(users);
+    }
+
     @PostMapping("/delete")
     public BaseResponse<Boolean> deleteUser(@RequestBody long id, HttpServletRequest request) {
-        if (!isAdmin(request)) {
+        if (!userService.isAdmin(request)) {
             throw new BusinessException(ErrorCode.NO_AUTH);
         }
         if (id <= 0) {
@@ -149,17 +209,6 @@ public class UserController {
 
     // [鱼皮的学习圈](https://yupi.icu) 从 0 到 1 求职指导，斩获 offer！1 对 1 简历优化服务、2000+ 求职面试经验分享、200+ 真实简历和建议参考、25w 字前后端精选面试题
 
-    /**
-     * 是否为管理员
-     *
-     * @param request
-     * @return
-     */
-    private boolean isAdmin(HttpServletRequest request) {
-        // 仅管理员可查询
-        Object userObj = request.getSession().getAttribute(USER_LOGIN_STATE);
-        User user = (User) userObj;
-        return user != null && user.getUserRole() == ADMIN_ROLE;
-    }
+
 
 }

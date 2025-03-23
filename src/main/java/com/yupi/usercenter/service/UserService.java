@@ -53,5 +53,13 @@ public interface UserService extends IService<User> {
      */
     int userLogout(HttpServletRequest request);
 
-    List<User> searchUserByTags(List<String> tagNameList);
+    List<User> searchUserByTagsInMemory(List<String> tagNameList);
+    List<User> searchUserByTagsInSQL(List<String> tagNameList);
+
+    int updateUser(User user, User loginUser);
+
+    public boolean isAdmin(HttpServletRequest request);
+    public boolean isAdmin(User loginUser);
+
+    User getLoginUser(HttpServletRequest request);
 }

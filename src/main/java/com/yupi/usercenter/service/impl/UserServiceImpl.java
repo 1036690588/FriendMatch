@@ -17,12 +17,15 @@ import org.springframework.util.DigestUtils;
 
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+import static com.yupi.usercenter.contant.UserConstant.ADMIN_ROLE;
 import static com.yupi.usercenter.contant.UserConstant.USER_LOGIN_STATE;
 
 /**
@@ -195,17 +198,10 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User>
     }
 
     @Override
-    public List<User> searchUserByTags(List<String> tagNameList){
-        //sql方法
+    public List<User> searchUserByTagsInMemory(List<String> tagNameList){
         if(CollectionUtils.isEmpty(tagNameList)){
             throw new BusinessException(ErrorCode.PARAMS_ERROR);
         }
-//        QueryWrapper<User> queryWrapper = new QueryWrapper<>();
-//        for (String tagName : tagNameList){
-//            queryWrapper = queryWrapper.like("tags", tagName);
-//        }
-//        List<User> users = userMapper.selectList(queryWrapper);
-//        return users.stream().map(this::getSafetyUser).collect(Collectors.toList());
         //内存方法
         QueryWrapper<User> queryWrapper = new QueryWrapper<>();
         List<User> users = userMapper.selectList(queryWrapper);
@@ -213,8 +209,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User>
         List<User> userList = users.stream().filter(user -> {
             String tags = user.getTags();
             if(StringUtils.isBlank(tags)) return false;
-            Set<String> tempTagList = gson.fromJson(tags, new TypeToken<Set<String>>() {
-            }.getType());
+            Set<String> tempTagList = gson.fromJson(tags, new TypeToken<Set<String>>() {}.getType());
+            tempTagList = Optional.ofNullable(tempTagList).orElse(new HashSet<>());
             for (String tagName : tagNameList) {
                 if (!tempTagList.contains(tagName)) {
                     return false;
@@ -224,6 +220,84 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User>
         }).map(this::getSafetyUser).collect(Collectors.toList());
         return userList;
     }
+
+    @Override
+    public List<User> searchUserByTagsInSQL(List<String> tagNameList){
+        //sql方法
+        if(CollectionUtils.isEmpty(tagNameList)){
+            throw new BusinessException(ErrorCode.PARAMS_ERROR);
+        }
+        QueryWrapper<User> queryWrapper = new QueryWrapper<>();
+        for (String tagName : tagNameList){
+            queryWrapper = queryWrapper.like("tags", tagName);
+        }
+        List<User> users = userMapper.selectList(queryWrapper);
+        return users.stream().map(this::getSafetyUser).collect(Collectors.toList());
+
+    }
+
+    @Override
+    public int updateUser(User user, User loginUser){
+        long id = user.getId();
+        if(id < 0){
+            throw new BusinessException(ErrorCode.PARAMS_ERROR);
+        }
+
+        if(!isAdmin(loginUser) && id != loginUser.getId()){
+            throw new BusinessException(ErrorCode.NO_AUTH);
+        }
+        User user1 = userMapper.selectById(id);
+        if(user1 == null){
+            throw new BusinessException(ErrorCode.NULL_ERROR);
+        }
+
+        return userMapper.updateById(user);
+    }
+
+    /**
+     * 是否为管理员
+     *
+     * @param request
+     * @return
+     */
+    @Override
+    public boolean isAdmin(HttpServletRequest request) {
+        // 仅管理员可查询
+        Object userObj = request.getSession().getAttribute(USER_LOGIN_STATE);
+        User user = (User) userObj;
+        return user != null && user.getUserRole() == ADMIN_ROLE;
+    }
+
+    /**
+     * 是否为管理员
+     *
+     * @param loginUser
+     * @return
+     */
+    @Override
+    public boolean isAdmin(User loginUser) {
+        // 仅管理员可查询
+        return loginUser != null && loginUser.getUserRole() == ADMIN_ROLE;
+    }
+
+    /**
+     * 获得登录用户
+     *
+     * @param request
+     * @return user
+     */
+    @Override
+    public User getLoginUser(HttpServletRequest request){
+        if (request == null) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR);
+        }
+        Object user = request.getSession().getAttribute(USER_LOGIN_STATE);
+        if(user == null){
+            throw new BusinessException(ErrorCode.NO_AUTH);
+        }
+        return (User)user;
+    }
+
 
 }
 
